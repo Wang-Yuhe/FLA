@@ -20,24 +20,24 @@ support = set()
 support_size_at_t = []
 new_winners_at_t = []
 # for each time step
-for t in xrange(T):
-	# calculate inputs into each of n neurons
-	inputs = [stimulus_inputs[i] for i in xrange(n)]
-	for i in winners:
-		for j in xrange(n):
-			inputs[j] += A_connectome[i][j]
-	# identify top k winners 	
-	new_winners = heapq.nlargest(k, range(len(inputs)), inputs.__getitem__)
-	for i in new_winners:
-		stimulus_inputs[i] *= (1+beta)
-	# plasticity: for winners, for previous winners, update edge weight
-	for i in winners:
-		for j in new_winners:
-			A_connectome[i][j] *= (1+beta)
-	# update winners
-	for i in new_winners:
-		support.add(i)
-	winners = new_winners
-	support_size_at_t.append(len(support))
-	if t >= 1:
-		new_winners_at_t.append(support_size_at_t[-1]-support_size_at_t[-2])
+for t in range(T):
+    # calculate inputs into each of n neurons
+    inputs = [stimulus_inputs[i] for i in range(n)]
+    for i in winners:
+        for j in range(n):
+            inputs[j] += A_connectome[i][j]
+    # identify top k winners
+    new_winners = heapq.nlargest(k, range(len(inputs)), inputs.__getitem__)
+    for i in new_winners:
+        stimulus_inputs[i] *= (1+beta)
+    # plasticity: for winners, for previous winners, update edge weight
+    for i in winners:
+        for j in new_winners:
+            A_connectome[i][j] *= (1+beta)
+    # update winners
+    for i in new_winners:
+        support.add(i)
+    winners = new_winners
+    support_size_at_t.append(len(support))
+    if t >= 1:
+        new_winners_at_t.append(support_size_at_t[-1]-support_size_at_t[-2])
