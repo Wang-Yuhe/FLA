@@ -1009,6 +1009,7 @@ def parseHelper(b, sentence, p, LEX_k, project_rounds, verbose, debug,
 def main():
     parse(sentence="愚蠢的 我 愤怒地 踢 一颗 硬邦邦的 球", language="Chinese", verbose=False, debug=False)
     parse(sentence="你 真 温柔 善良 大度", language="Chinese", verbose=False, debug=False)
+    
 
 if __name__ == "__main__":
     main()
