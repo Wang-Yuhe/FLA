@@ -25,10 +25,10 @@ def setup_jieba_for_lexemes():
         jieba.add_word(w, freq=10_000)
 
     # 2) 强制切分/合并的关键点（与词元表对齐）
-    # 你希望：我踢球 -> 我 / 踢 / 球（而不是 踢球）
+    # 我踢球 -> 我 / 踢 / 球（而不是 踢球）
     jieba.suggest_freq(("踢", "球"), True)
 
-    # 你希望：红温了 / 愚蠢的 / 愤怒地 这些不要被拆
+    # 红温了 / 愚蠢的 / 愤怒地 这些不要被拆
     jieba.suggest_freq("红温了", True)
     jieba.suggest_freq("愚蠢的", True)
     jieba.suggest_freq("聪明的", True)

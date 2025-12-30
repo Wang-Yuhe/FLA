@@ -180,7 +180,7 @@ def generic_chinese_adjective(index):
         ],
         "POST_RULES": [
         FiberRule(INHIBIT, LEX, ADJ, 0),
-        FiberRule(INHIBIT, VERB, ADJ, 0),
+        # FiberRule(INHIBIT, VERB, ADJ, 0),
         ]
 
     }
@@ -609,6 +609,26 @@ class ParserBrain(brain.Brain):
                 return word
         return None
 
+    def getWordsFromLEX(self, min_overlap=0.25, topn=20):
+        #可能会出现多个形容词的情况，可以返回多个候选词
+        if not self.area_by_name[LEX].winners:
+            return []
+        winners = set(self.area_by_name[LEX].winners)
+        area_k = self.area_by_name[LEX].k
+        threshold = min_overlap * area_k
+
+        scored = []
+        for word, lexeme in self.lexeme_dict.items():
+            word_index = lexeme["index"]
+            start = word_index * area_k
+            word_asm = set(range(start, start + area_k))
+            overlap = len(winners & word_asm)
+            if overlap >= threshold:
+                scored.append((overlap, word))
+
+        scored.sort(reverse=True)
+        return [w for _, w in scored[:topn]]
+
     def getActivatedFibers(self):
         # Prune activated_fibers pased on the readout_rules
         pruned_activated_fibers = defaultdict(set)
@@ -677,7 +697,7 @@ class EnglishParserBrain(ParserBrain):
         self.add_area(ADJ, non_LEX_n, non_LEX_k, default_beta)
         self.add_area(PREP, non_LEX_n, non_LEX_k, default_beta)
         self.add_area(PREP_P, non_LEX_n, non_LEX_k, default_beta)
-        self.add_area(DET, non_LEX_n, DET_k, default_beta)
+        self.add_area(DET, non_LEX_n, non_LEX_k, default_beta)
         self.add_area(ADVERB, non_LEX_n, non_LEX_k, default_beta)
 
         # LEX: all areas -> * strong, * -> * can be strong
@@ -953,6 +973,19 @@ def parseHelper(b, sentence, p, LEX_k, project_rounds, verbose, debug,
         b.area_by_name[area].unfix_assembly()
 
     dependencies = []
+
+    def _is_chinese_adj(word: str) -> bool:
+        if lexeme_dict is not CHINESE_LEXEME_DICT:
+            return False
+        info = lexeme_dict.get(word)
+        if not info:
+            return False
+        # 通过是否会 DISINHIBIT ADJ 来判断“它是不是中文形容词词元”
+        for r in info.get("PRE_RULES", []):
+            if isinstance(r, AreaRule) and r.area == ADJ and r.action == DISINHIBIT:
+                return True
+        return False
+
     def read_out(area, mapping):
         to_areas = mapping[area]
         b.project({}, {area: to_areas})
@@ -961,9 +994,21 @@ def parseHelper(b, sentence, p, LEX_k, project_rounds, verbose, debug,
         for to_area in to_areas:
             if to_area == LEX:
                 continue
+
             b.project({}, {to_area: [LEX]})
-            other_word = b.getWord(LEX)
-            dependencies.append([this_word, other_word, to_area])
+
+            # 中文的 ADJ 允许读出多个
+            if lexeme_dict is CHINESE_LEXEME_DICT and to_area == ADJ:
+                cands = b.getWordsFromLEX(min_overlap=0.25, topn=20)
+                cands = [w for w in cands if _is_chinese_adj(w)]
+                if cands:
+                    for w in cands:
+                        dependencies.append([this_word, w, to_area])
+                else:
+                    dependencies.append([this_word, b.getWord(LEX), to_area])
+            else:
+                other_word = b.getWord(LEX)
+                dependencies.append([this_word, other_word, to_area])
 
         for to_area in to_areas:
             if to_area != LEX:
