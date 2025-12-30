@@ -5,6 +5,7 @@ import numpy as np
 import pptree
 import json
 import copy
+import jieba
 
 from collections import namedtuple
 from collections import defaultdict
@@ -26,6 +27,9 @@ NOM = "NOM"
 ACC = "ACC"
 DAT = "DAT"
 
+# Unique to Chinese
+QUANT = "QUANT" # 量词
+
 # Fixed area stats for explicit areas
 LEX_SIZE = 20
 
@@ -45,11 +49,171 @@ RUSSIAN_AREAS = [LEX, NOM, VERB, ACC, DAT]
 RUSSIAN_EXPLICIT_AREAS = [LEX]
 RUSSIAN_LEX_SIZE = 7
 
+# 词汇、主语、宾语、动词、形容词、副词、量词（没有冠词、介词、介词短语）
+# 注：PPT中对于表语的认识有误，在这里暂且认为表语属于特殊的宾语，PPT中的表语应该指的是系动词
+CHINESE_AREAS = [LEX, SUBJ, OBJ, VERB, ADJ, ADVERB, QUANT]
+CHINESE_EXPLICIT_AREAS = [LEX]
+CHINESE_LEX_SIZE = 20
 
 AreaRule = namedtuple('AreaRule', ['action', 'area', 'index'])
 FiberRule = namedtuple('FiberRule', ['action', 'area1', 'area2', 'index'])
 FiringRule = namedtuple('FiringRule', ['action'])
 OtherRule = namedtuple('OtherRule', ['action'])
+
+def generic_chinese_noun(index):
+    return {
+        "index": index,
+        "PRE_RULES": [
+            # 1. 名词可以做主语或宾语
+            FiberRule(DISINHIBIT, LEX, SUBJ, 0),
+            FiberRule(DISINHIBIT, LEX, OBJ, 0),
+            # 2. 量词
+            FiberRule(DISINHIBIT, QUANT, OBJ, 0), # “一颗球”
+            # 3. 形容词
+            FiberRule(DISINHIBIT, ADJ, SUBJ, 0), # “聪明的我”
+            FiberRule(DISINHIBIT, ADJ, OBJ, 0), # “硬邦邦的球”
+            # 4. 动词
+            FiberRule(DISINHIBIT, VERB, OBJ, 0), # “踢球”
+        ],
+        "POST_RULES": [
+            # 1. 名词后面不能再接量词、形容词
+            AreaRule(INHIBIT, QUANT, 0),
+            AreaRule(INHIBIT, ADJ, 0),
+            # 2. 刚刚关闭的0号抑制因子重新激活
+            FiberRule(INHIBIT, LEX, SUBJ, 0),
+            FiberRule(INHIBIT, LEX, OBJ, 0),
+            FiberRule(INHIBIT, ADJ, SUBJ, 0),
+            FiberRule(INHIBIT, ADJ, OBJ, 0),
+            FiberRule(INHIBIT, QUANT, OBJ, 0),
+            FiberRule(INHIBIT, VERB, OBJ, 0),
+            # 3. 因为目标句式中没有介词或者介宾短语，所以不需要1号抑制因子来控制可能存在的介词部分
+            # 4. 抑制不希望发生的投影
+            FiberRule(INHIBIT, VERB, ADJ, 0)
+            # Q：为什么不在generic_verb里inhibit？
+        ]
+    }
+
+def generic_chinese_quantifier(index):
+    return {
+        "index": index,
+        "PRE_RULES": [
+        AreaRule(DISINHIBIT, QUANT, 0),
+        FiberRule(DISINHIBIT, LEX, QUANT, 0),
+        ],
+        "POST_RULES": [
+        FiberRule(INHIBIT, LEX, QUANT, 0),
+        ]
+
+    }
+
+# 及物动词
+def generic_chinese_trans_verb(index):
+    return {
+        "index": index,
+        "PRE_RULES": [
+        FiberRule(DISINHIBIT, LEX, VERB, 0),
+        FiberRule(DISINHIBIT, VERB, SUBJ, 0),
+        FiberRule(DISINHIBIT, VERB, ADVERB, 0),
+        AreaRule(DISINHIBIT, ADVERB, 1),
+        ],
+        "POST_RULES": [
+        FiberRule(INHIBIT, LEX, VERB, 0),
+        AreaRule(DISINHIBIT, OBJ, 0),
+        AreaRule(INHIBIT, SUBJ, 0),
+        AreaRule(INHIBIT, ADVERB, 0),
+        ]
+    }
+
+# 不及物动词
+def generic_chinese_intrans_verb(index):
+    return {
+        "index": index,
+        "PRE_RULES": [
+        FiberRule(DISINHIBIT, LEX, VERB, 0),
+        FiberRule(DISINHIBIT, VERB, SUBJ, 0),
+        FiberRule(DISINHIBIT, VERB, ADVERB, 0),
+        AreaRule(DISINHIBIT, ADVERB, 1),
+        ],
+        "POST_RULES": [
+        FiberRule(INHIBIT, LEX, VERB, 0),
+        AreaRule(INHIBIT, SUBJ, 0),
+        AreaRule(INHIBIT, ADVERB, 0),
+        ]
+    }
+
+# 系动词
+def generic_chinese_copula(index):
+    return {
+        "index": index,
+        "PRE_RULES": [
+        FiberRule(DISINHIBIT, LEX, VERB, 0),
+        FiberRule(DISINHIBIT, VERB, SUBJ, 0),
+        ],
+        "POST_RULES": [
+        FiberRule(INHIBIT, LEX, VERB, 0),
+        AreaRule(DISINHIBIT, OBJ, 0),
+        AreaRule(INHIBIT, SUBJ, 0),
+        FiberRule(DISINHIBIT, ADJ, VERB, 0)
+        ]
+    }
+
+def generic_chinese_adverb(index):
+    return {
+        "index": index,
+        "PRE_RULES": [
+        AreaRule(DISINHIBIT, ADVERB, 0),
+        FiberRule(DISINHIBIT, LEX, ADVERB, 0)
+        ],
+        "POST_RULES": [
+        FiberRule(INHIBIT, LEX, ADVERB, 0),
+        AreaRule(INHIBIT, ADVERB, 1),
+        ]
+
+    }
+
+def generic_chinese_adjective(index):
+    return {
+        "index": index,
+        "PRE_RULES": [
+        AreaRule(DISINHIBIT, ADJ, 0),
+        FiberRule(DISINHIBIT, LEX, ADJ, 0),
+        ],
+        "POST_RULES": [
+        FiberRule(INHIBIT, LEX, ADJ, 0),
+        FiberRule(INHIBIT, VERB, ADJ, 0),
+        ]
+
+    }
+
+CHINESE_LEXEME_DICT = {
+    "我": generic_chinese_noun(0),
+    "球": generic_chinese_noun(1),
+    "人类": generic_chinese_noun(2),
+    "无可奈何地": generic_chinese_adverb(3),
+    "红温了": generic_chinese_intrans_verb(4),
+    "踢": generic_chinese_trans_verb(5),
+    "一颗": generic_chinese_quantifier(6),
+    "并非": generic_chinese_copula(7),
+    "聪明的": generic_chinese_adjective(8),
+    "愚蠢的": generic_chinese_adjective(9),
+    "硬邦邦的": generic_chinese_adjective(10),
+    "愤怒地": generic_chinese_adverb(11),
+    "真": generic_chinese_copula(12),
+    "温柔": generic_chinese_adjective(13),
+    "善良": generic_chinese_adjective(14),
+    "大度": generic_chinese_adjective(15),
+    "你": generic_chinese_noun(16),
+}
+
+CHINESE_READOUT_RULES = {
+    VERB: [LEX, SUBJ, OBJ, ADVERB, ADJ], # 有ADJ是因为有系动词
+    SUBJ: [LEX, ADJ],
+    OBJ: [LEX, QUANT, ADJ],
+    ADJ: [LEX],
+    QUANT: [LEX],
+    ADVERB: [LEX],
+    LEX: [],
+}
 
 def generic_noun(index):
     return {
@@ -492,7 +656,6 @@ class RussianParserBrain(ParserBrain):
 
         self.update_plasticities(area_update_map=custom_plasticities)
 
-
 class EnglishParserBrain(ParserBrain):
     def __init__(self, p, non_LEX_n=10000, non_LEX_k=100, LEX_k=20,
         default_beta=0.2, LEX_beta=1.0, recurrent_beta=0.05, interarea_beta=0.5, verbose=False):
@@ -556,7 +719,43 @@ class EnglishParserBrain(ParserBrain):
         # If nothing matched, at least we can see that in the parse output.
         return "<NON-WORD>"
 
+class ChineseParserBrain(ParserBrain):
+    def __init__(self, p, non_LEX_n=10000, non_LEX_k=100, LEX_k=20,
+        default_beta=0.2, LEX_beta=1.0, recurrent_beta=0.05, interarea_beta=0.5, verbose=False):
+        recurrent_areas = [SUBJ, VERB, OBJ, ADJ, QUANT, ADVERB]
 
+        ParserBrain.__init__(self, p,
+            lexeme_dict=CHINESE_LEXEME_DICT,
+            all_areas=CHINESE_AREAS,
+            recurrent_areas=recurrent_areas,
+            initial_areas=[LEX, SUBJ, VERB],
+            readout_rules=CHINESE_READOUT_RULES)
+        self.verbose = verbose
+
+        LEX_n = CHINESE_LEX_SIZE * LEX_k
+        self.add_explicit_area(LEX, LEX_n, LEX_k, default_beta)
+
+        self.add_area(SUBJ, non_LEX_n, non_LEX_k, default_beta)
+        self.add_area(OBJ, non_LEX_n, non_LEX_k, default_beta)
+        self.add_area(VERB, non_LEX_n, non_LEX_k, default_beta)
+        self.add_area(ADJ, non_LEX_n, non_LEX_k, default_beta)
+        self.add_area(QUANT, non_LEX_n, non_LEX_k, default_beta)
+        self.add_area(ADVERB, non_LEX_n, non_LEX_k, default_beta)
+
+        # LEX: all areas -> * strong, * -> * can be strong
+        # non LEX: other areas -> * (?), LEX -> * strong, * -> * weak
+        # DET? Should it be different?
+        custom_plasticities = defaultdict(list)
+        for area in recurrent_areas:
+            custom_plasticities[LEX].append((area, LEX_beta))
+            custom_plasticities[area].append((LEX, LEX_beta))
+            custom_plasticities[area].append((area, recurrent_beta))
+            for other_area in recurrent_areas:
+                if other_area == area:
+                    continue
+                custom_plasticities[area].append((other_area, interarea_beta))
+
+        self.update_plasticities(area_update_map=custom_plasticities)
 
 class ParserDebugger():
     def __init__(self, brain, all_areas, explicit_areas):
@@ -659,9 +858,6 @@ class ReadoutMethod(Enum):
     NATURAL_READOUT = 3
 
 
-
-
-
 def parse(sentence="cats chase mice", language="English", p=0.1, LEX_k=20,
     project_rounds=20, verbose=True, debug=False, readout_method=ReadoutMethod.FIBER_READOUT):
 
@@ -678,6 +874,13 @@ def parse(sentence="cats chase mice", language="English", p=0.1, LEX_k=20,
         all_areas = RUSSIAN_AREAS
         explicit_areas = RUSSIAN_EXPLICIT_AREAS
         readout_rules = RUSSIAN_READOUT_RULES
+
+    if language == "Chinese":
+        b = ChineseParserBrain(p, LEX_k=LEX_k, verbose=verbose)
+        lexeme_dict = CHINESE_LEXEME_DICT
+        all_areas = CHINESE_AREAS
+        explicit_areas = CHINESE_EXPLICIT_AREAS
+        readout_rules = CHINESE_READOUT_RULES
 
     parseHelper(b, sentence, p, LEX_k, project_rounds, verbose, debug,
         lexeme_dict, all_areas, explicit_areas, readout_method, readout_rules)
@@ -803,9 +1006,9 @@ def parseHelper(b, sentence, p, LEX_k, project_rounds, verbose, debug,
 
     # pptree.print_tree(root)
 
-
 def main():
-    parse()
+    parse(sentence="愚蠢的 我 愤怒地 踢 一颗 硬邦邦的 球", language="Chinese", verbose=False, debug=False)
+    parse(sentence="你 真 温柔 善良 大度", language="Chinese", verbose=False, debug=False)
 
 if __name__ == "__main__":
     main()
